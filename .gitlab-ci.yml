@@ -1,0 +1,58 @@
+image: microsoft/dotnet:2.1-sdk-alpine
+
+before_script:
+  - echo "http://mirrors.aliyun.com/alpine/v3.7/main/" > /etc/apk/repositories
+  - 'which ssh-agent || ( apk update && apk add --no-cache openssh )'
+  - mkdir -p ~/.ssh
+  - eval $(ssh-agent -s)
+  - '[[ -f /.dockerenv ]] && echo -e "Host *\n\tStrictHostKeyChecking no\n\n" > ~/.ssh/config'
+
+stages:
+  - test
+  - publish
+  - deploy
+
+test:
+  stage: test
+  services:
+    - name: mysql:5.7
+      alias: mysql
+      command: ["mysqld", "--character-set-server=utf8", "--collation-server=utf8_unicode_ci"]
+  variables:
+    MYSQL_DATABASE: MyApp_db_test 
+    MYSQL_USER: MyApp_admin
+    MYSQL_PASSWORD: MyApp_admin_123@qwe
+    MYSQL_ROOT_PASSWORD: MyApp_admin_123@qwe
+  script: TEST_ENV=Test dotnet test -v=m MyApp.Tests/
+
+publish:
+  stage: publish
+  script:
+    - dotnet publish MyApp/MyApp.csproj -c Release -f netcoreapp2.1 -o ../publish/publish
+    - cp version ./publish
+    - cp Dockerfile ./publish
+    - rm -rf /root/MyApp/publish/*
+    - mkdir -p /root/MyApp/publish
+    - cp -a publish/publish/* /root/MyApp/publish
+    # - echo "$SSH_PRIVATE_KEY" | ssh-add -
+    # - ssh -p22 root@112.124.3.134 "docker restart MyApp"
+  artifacts:
+    paths:
+      - publish
+    expire_in: 20min
+
+deploy:
+  stage: deploy
+# 只在 release 分布执行 depoly 操作
+  only:
+    - release
+  services:
+# --privileged 参数必须设置
+    - docker:stable-dind
+  image: docker:stable
+  script:
+    - cd publish
+# docker仓库，tag等信息根据实际项目调整。
+    - docker login -u $DOCKER_USER -p $DOCKER_PWD registry.cn-hangzhou.aliyuncs.com 
+    - docker build -t registry.cn-hangzhou.aliyuncs.com/jmax/my_app:v$(cat version) .
+    - docker push registry.cn-hangzhou.aliyuncs.com/jmax/my_app:v$(cat version)
